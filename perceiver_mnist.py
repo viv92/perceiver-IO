@@ -31,8 +31,12 @@ class Perceiver_xattn(nn.Module):
         super().__init__()
         self.xattn = xattn
         self.feed_forward = feed_forward
+        self.ln_kv = nn.LayerNorm(dim)
         self.sublayers = clones(SublayerConnection(dim, dropout), 2) # first for xattn block, second for feed_forward block
     def forward(self, x, z, mask_padding):
+        # normalize keys and values (normalization for query is taken care of by the xattn sublayer)
+        x = self.ln_kv(x)
+        # forward prop through xattn sublayer
         z = self.sublayers[0](z, lambda z: self.xattn(x, z, x, mask_padding=mask_padding)) # xattn: (key=x, query=z, value=x)
         z = self.sublayers[1](z, self.feed_forward)
         return z
@@ -49,6 +53,7 @@ class Perceiver(nn.Module):
         self.x_emb = nn.Linear(x_dim, d_model, bias=False)
         self.z_pos_emb = nn.Parameter(torch.rand(z_seqlen, d_model)) # learnt positional embeddings
         self.x_pos_emb = nn.Parameter(torch.rand(x_seqlen, d_model)) # learnt positional embeddings
+        self.ln_out = nn.LayerNorm(d_model) # layerNorm on final output
         self.proj_head = nn.Linear(d_model, out_dim)
     def forward(self, x): # x.shape: [b, M, C]
         batch_size = x.shape[0]
@@ -64,6 +69,8 @@ class Perceiver(nn.Module):
         for _ in range(self.depth-1):
             z = self.cross_attn_shared(x, z, mask_padding=None) # key = x, query = z, value = x
             z = self.latent_transformer(z, mask_padding=None, mask_causal=None)
+        # apply final layernorm 
+        z = self.ln_out(z) # z.shape: [b, z_seqlen, d_model]
         # average over latent dimension 
         z = z.mean(dim=1) # z.shape: [b, d_model]
         out = self.proj_head(z) # out.shape: [b, out_dim]
@@ -163,12 +170,12 @@ if __name__ == '__main__':
     dropout = 0.1
     batch_size = 128
     lr = 3e-4
-    num_epochs = 30
+    num_epochs = 6
     num_evals_per_epoch = 1
     random_seed = 10
 
-    checkpoint_path = 'ckpts/perceiver_mnist.pt' # path to a save and load checkpoint of the trained model
-    resume_training_from_ckpt = True 
+    checkpoint_path = 'ckpts/perceiver_lnfix_mnist.pt' # path to a save and load checkpoint of the trained model
+    resume_training_from_ckpt = True  
 
     # set random seed
     np.random.seed(random_seed)
@@ -272,4 +279,4 @@ if __name__ == '__main__':
     plt.plot(x, results_test_accuracy, label='test_accuracy')
     plt.legend()
     plt.title('final_test_accuracy: ' + str(results_test_accuracy[-1]))
-    plt.savefig('plots/perceiver_mnist_DataAug' + hyperparam_str + '.png')
+    plt.savefig('plots/perceiver_lnfix_mnist_DataAug' + hyperparam_str + '.png')

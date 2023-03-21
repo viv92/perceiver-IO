@@ -33,11 +33,13 @@ class Perceiver_xattn_encoder(nn.Module):
         super().__init__()
         self.xattn = xattn
         self.feed_forward = feed_forward
-        self.ln1 = nn.LayerNorm(dim)
+        self.ln1_q = nn.LayerNorm(dim)
+        self.ln1_kv = nn.LayerNorm(dim)
         self.ln2 = nn.LayerNorm(dim)
         self.dropout = nn.Dropout(dropout)
     def forward(self, x, z, mask_padding):
-        z1 = self.ln1(z)
+        x = self.ln1_kv(x)
+        z1 = self.ln1_q(z)
         z1 = self.xattn(x, z1, x, mask_padding=mask_padding) # xattn: (key=x, query=z, value=x)
         z = self.dropout(z1) + z 
         z1 = self.ln2(z)
@@ -51,11 +53,13 @@ class Perceiver_xattn_decoder(nn.Module):
         super().__init__()
         self.xattn = xattn
         self.feed_forward = feed_forward
-        self.ln1 = nn.LayerNorm(dim)
+        self.ln1_q = nn.LayerNorm(dim)
+        self.ln1_kv = nn.LayerNorm(dim)
         self.ln2 = nn.LayerNorm(dim)
         self.dropout = nn.Dropout(dropout)
     def forward(self, o, z, mask_padding):
-        o1 = self.ln1(o)
+        z = self.ln1_kv(z)
+        o1 = self.ln1_q(o)
         o1 = self.xattn(z, o1, z, mask_padding=mask_padding) # xattn: (key=x, query=o, value=x)
         o = self.dropout(o1) # note no residual connection here for decoder (as mentioned in perceiverIO paper: appendix E1) 
         o1 = self.ln2(o)
@@ -78,6 +82,7 @@ class PerceiverIO(nn.Module):
         self.z_pos_emb = nn.Parameter(torch.rand(z_seqlen, d_model)) # learnt positional embeddings
         self.x_pos_emb = nn.Parameter(torch.rand(x_seqlen, d_model)) # learnt positional embeddings
         self.o_pos_emb = nn.Parameter(torch.rand(o_seqlen, d_model)) # learnt positional embeddings
+        self.ln_out = nn.LayerNorm(d_model) # layernorm on final output
         self.proj_head = nn.Linear(d_model, o_dim) # final projection to o_dim (desired channel dimension of output)
     def forward(self, x): # x.shape: [b, M, C]
         batch_size = x.shape[0]
@@ -97,6 +102,8 @@ class PerceiverIO(nn.Module):
             z = self.latent_transformer(z, mask_padding=None, mask_causal=None)
         # decode the latent code to output vector
         o = self.xattn_decoder(o, z, mask_padding=None) # key = z, query = o, value = z
+        # apply final layernorm 
+        o = self.ln_out(o) # o.shape: [b, o_seqlen, d_model]
         # project channel dimension of the output to the required dimension
         o = self.proj_head(o) # o.shape: [b, O = o_seqlen, E = o_dim]
         return o
@@ -198,12 +205,12 @@ if __name__ == '__main__':
     dropout = 0.1
     batch_size = 128
     lr = 3e-4
-    num_epochs = 30
+    num_epochs = 6
     num_evals_per_epoch = 1
     random_seed = 10
 
-    checkpoint_path = 'ckpts/perceiverIO_mnist_classification.pt' # path to a save and load checkpoint of the trained model
-    resume_training_from_ckpt = True 
+    checkpoint_path = 'ckpts/perceiverIO_lnfix_mnist_classification.pt' # path to a save and load checkpoint of the trained model
+    resume_training_from_ckpt = True   
 
     # set random seed
     np.random.seed(random_seed)
@@ -310,4 +317,4 @@ if __name__ == '__main__':
     plt.plot(x, results_test_accuracy, label='test_accuracy')
     plt.legend()
     plt.title('final_test_accuracy: ' + str(results_test_accuracy[-1]))
-    plt.savefig('plots/perceiverIO_mnist_classification_DataAug' + hyperparam_str + '.png')
+    plt.savefig('plots/perceiverIO_lnfix_mnist_classification_DataAug' + hyperparam_str + '.png')
